@@ -269,3 +269,37 @@ class LoadFlow(SequentialTaskSet):
             ):
                 return db.get("id")
         return None
+
+    def _create_flow(self):
+        flow_id = FlowManager.get_next_id(worker_id=self.worker_id)
+        flow_name = f"Tube_{flow_id}"
+        flow_data = copy.deepcopy(CONFIG["flow_template"])
+        flow_data["label"] = flow_name
+        resp = self._retry_request(
+            self.client.post,
+            CONFIG["api"]["flow_endpoint"],
+            name="Create flow",
+            json=flow_data,
+            timeout=20,
+        )
+        if not resp or not resp.ok:
+            FLOW_CREATIONS.labels(status="failed").inc()  # ★★★ МЕТРИКА ★★★
+            return None, None
+        new_flow_id = resp.json().get("id")
+        FLOW_CREATIONS.labels(status="success").inc()  # ★★★ МЕТРИКА ★★★
+        return flow_name, new_flow_id
+
+    def _get_dag_params(self, flow_id):
+        url = f"/etl/api/v1/flow/dag_params/v2/spm_file_loader_v2?q=(active:!f,block_id:0,enum_limit:20,flow_id:{flow_id})"
+        resp = self._retry_request(
+            self.client.get, url, name="Get DAG parameters", timeout=15
+        )
+        if not resp or not resp.ok:
+            return None, None
+        target_connection = target_schema = None
+        for item in resp.json().get("result", []):
+            if item[0] == "target_connection":
+                target_connection = item[1]["value"]
+            elif item[0] == "target_schema":
+                target_schema = item[1]["value"]
+        return target_connection, target_schema
