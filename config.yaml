@@ -1,0 +1,140 @@
+api:
+  base_url: https://site.ru
+  flow_endpoint: /etl/api/v1/flow/
+block:
+  block_id: spm_file_loader_v2[0]
+  dag_id: spm_file_loader_v2
+chunk_size: 4194304
+csv_file_path: ./data/process_mining_generator/dataset/process_log_20_0GBcsv
+flow_template:
+  config:
+    blocks: []
+  config_inactive:
+    blocks: []
+    chart_height: 288
+  dag: spm_orchestrator
+  flow_type: spm_orchestrator
+  is_active: false
+  retries: 1
+  schedule: '@never'
+log_debug: false
+log_level: INFO
+log_verbose: true
+max_retries: 3
+monitoring:
+  collect_interval: 15
+  enable_metrics: true
+  metrics_port: 9090
+  metrics_prefix: superset_loadtest
+request_timeout: 30
+retry_delay: 2
+update_columns:
+- column_name: id
+  column_type: int
+  column_use: true
+  id: 1
+- column_name: process
+  column_type: str
+  column_use: true
+  id: 2
+- column_name: activity
+  column_type: str
+  column_use: true
+  id: 3
+- column_name: start
+  column_type: date
+  column_use: true
+  date_format: yyyy-MM-dd HH:mm:ss
+  id: 4
+- column_name: end
+  column_type: date
+  column_use: true
+  date_format: yyyy-MM-dd HH:mm:ss
+  id: 5
+- column_name: user_id
+  column_type: str
+  column_use: true
+  id: 6
+- column_name: department
+  column_type: str
+  column_use: true
+  id: 7
+- column_name: priority
+  column_type: str
+  column_use: true
+  id: 8
+- column_name: cost
+  column_type: int
+  column_use: true
+  id: 9
+- column_name: comment
+  column_type: str
+  column_use: true
+  id: 10
+upload_columns:
+- column_name: id
+  column_type: int
+  column_use: true
+  id: 1
+- column_name: process
+  column_type: str
+  column_use: true
+  id: 2
+- column_name: activity
+  column_type: str
+  column_use: true
+  id: 3
+- column_name: start
+  column_type: date
+  column_use: true
+  date_format: yyyy-MM-dd HH:mm:ss
+  id: 4
+- column_name: end
+  column_type: date
+  column_use: true
+  date_format: yyyy-MM-dd HH:mm:ss
+  id: 5
+- column_name: user_id
+  column_type: str
+  column_use: true
+  id: 6
+- column_name: department
+  column_type: str
+  column_use: true
+  id: 7
+- column_name: priority
+  column_type: str
+  column_use: true
+  id: 8
+- column_name: cost
+  column_type: int
+  column_use: true
+  id: 9
+- column_name: comment
+  column_type: str
+  column_use: true
+  id: 10
+upload_control:
+  chunk_threshold: 200
+  pool_interval: 5
+  timeout_large: 1800
+  timeout_small: 300
+upload_settings:
+  date_convert: true
+  default_timezone: Europe/Moscow
+  delimiter: ','
+  encoding: UTF-8
+  file_type: CSV
+  if_exists: replace
+  skip_rows: 0
+users:
+- password: FROM_ENV
+  username: admin
+- password: FROM_ENV
+  username: autoanalyst
+- password: FROM_ENV
+  username: autoanalystexpert
+- password: FROM_ENV
+  username: uservt_1
+- password: FROM_ENV
+  username: uservt_2
