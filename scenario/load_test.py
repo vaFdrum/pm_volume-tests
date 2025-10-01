@@ -5,17 +5,15 @@ import logging
 import random
 import time
 from datetime import datetime
-from urllib.parse import urljoin, quote
-
+from urllib.parse import quote
 import urllib3
 from locust import SequentialTaskSet, task, between
 
-from common.auth import extract_login_form
+from common.auth import establish_session
 from common.csv_utils import split_csv_generator, count_chunks, count_csv_lines
-from common.managers import FlowManager, UserPool
+from common.managers import FlowManager, UserPool, stop_manager
 from common.metrics import (
     REQUEST_COUNT,
-    AUTH_ATTEMPTS,
     CHUNK_UPLOADS,
     FLOW_CREATIONS,
     ACTIVE_USERS,
@@ -23,7 +21,6 @@ from common.metrics import (
     UPLOAD_PROGRESS,
     SESSION_STATUS,
     REQUEST_DURATION,
-    AUTH_DURATION,
     CHUNK_UPLOAD_DURATION,
     FLOW_PROCESSING_DURATION,
     COUNT_VALIDATION_RESULT,
@@ -45,6 +42,7 @@ class LoadFlow(SequentialTaskSet):
     def __init__(self, parent):
         super().__init__(parent)
         self.session_id = f"{random.randint(1000, 9999)}"
+        self.local_stop_triggered = False
         self.logged_in = False
         self.session_valid = False
         self.total_chunks = count_chunks(CONFIG["csv_file_path"], CONFIG["chunk_size"])
@@ -53,6 +51,9 @@ class LoadFlow(SequentialTaskSet):
         self.username = None
         self.password = None
         self.flow_id = None
+
+        # ★★★ ИНИЦИАЛИЗИРУЕМ ГЛОБАЛЬНЫЙ МЕНЕДЖЕР ★★★
+        stop_manager.set_max_iterations(CONFIG.get("max_iterations", 1))
 
         # ★★★ УСТАНАВЛИВАЕМ МЕТРИКУ ОЖИДАЕМЫХ СТРОК ★★★
         EXPECTED_ROWS.set(self.total_lines)
@@ -149,88 +150,32 @@ class LoadFlow(SequentialTaskSet):
         return None
 
     def establish_session(self):
-        """Establish user session with authentication"""
-        auth_start_time = time.time()  # ★★★ ЗАПОМИНАЕМ ВРЕМЯ НАЧАЛА АУТЕНТИФИКАЦИИ ★★★
+        """Establish user session with authentication (using external function)"""
+        success = establish_session(
+            client=self.client,
+            username=self.username,
+            password=self.password,
+            session_id=self.session_id,
+            log_function=self.log
+        )
 
-        for attempt in range(CONFIG["max_retries"]):
-            try:
-                self.client.cookies.clear()
-
-                # 1) GET login page
-                resp = self._retry_request(
-                    self.client.get, url="/", name="Get login page", timeout=10
-                )
-                if not resp or resp.status_code != 200:
-                    AUTH_ATTEMPTS.labels(
-                        username=self.username, success="false"
-                    ).inc()  # ★★★ МЕТРИКА ★★★
-                    continue
-
-                form = extract_login_form(resp.text, self.username, self.password)
-                if not form:
-                    AUTH_ATTEMPTS.labels(
-                        username=self.username, success="false"
-                    ).inc()  # ★★★ МЕТРИКА ★★★
-                    continue
-
-                # 2) POST credentials
-                resp = self._retry_request(
-                    self.client.post,
-                    form["action"],
-                    name="Submit credentials",
-                    data=form["payload"],
-                    allow_redirects=False,
-                    timeout=15,
-                )
-                if not resp or resp.status_code != 302:
-                    AUTH_ATTEMPTS.labels(
-                        username=self.username, success="false"
-                    ).inc()  # ★★★ МЕТРИКА ★★★
-                    continue
-
-                location = resp.headers.get("Location")
-                if not location:
-                    AUTH_ATTEMPTS.labels(
-                        username=self.username, success="false"
-                    ).inc()  # ★★★ МЕТРИКА ★★★
-                    continue
-
-                # 3) Complete redirect
-                resp = self._retry_request(
-                    self.client.get,
-                    urljoin(form["action"], location),
-                    name="Complete auth redirect",
-                    timeout=10,
-                )
-                if resp and resp.status_code == 200:
-                    self.logged_in = True
-                    self.session_valid = True
-                    self.log(f"Authentication successful for {self.username}")
-
-                    # ★★★ ЗАПИСЫВАЕМ МЕТРИКИ УСПЕШНОЙ АУТЕНТИФИКАЦИИ ★★★
-                    auth_duration = time.time() - auth_start_time
-                    AUTH_DURATION.observe(auth_duration)
-                    AUTH_ATTEMPTS.labels(username=self.username, success="true").inc()
-                    SESSION_STATUS.labels(username=self.username).set(1)
-                    ACTIVE_USERS.inc()
-
-                    return
-
-            except Exception as e:
-                self.log(
-                    f"Auth attempt {attempt + 1} failed: {str(e)}", logging.WARNING
-                )
-                AUTH_ATTEMPTS.labels(
-                    username=self.username, success="false"
-                ).inc()  # ★★★ МЕТРИКА ★★★
-                time.sleep(CONFIG["retry_delay"])
-
-        self.log("Authentication failed", logging.ERROR)
-        SESSION_STATUS.labels(username=self.username).set(0)  # ★★★ МЕТРИКА ★★★
-        self.interrupt()
+        if success:
+            self.logged_in = True
+            self.session_valid = True
+            self.log(f"Authentication successful for {self.username}")
+        else:
+            self.log("Authentication failed", logging.ERROR)
+            self.interrupt()
 
     def on_start(self):
         """Initialize user session and credentials"""
+        if self.local_stop_triggered or stop_manager.is_stop_called():
+            return
+
+        if stop_manager.should_stop():
+            self._safe_stop_runner("Global stop signal detected in on_start.")
+            return
+
         runner = getattr(self, "environment", None)
         if runner:
             runner = getattr(runner, "runner", None)
@@ -258,16 +203,23 @@ class LoadFlow(SequentialTaskSet):
         )
         if not resp or not resp.ok:
             return None
-        normalized_username = self.username.replace("_", "")
+
+        normalized_username = str(self.username).replace("_", "")
+        expected_pattern = f"SberProcessMiningDB_{normalized_username}"
+
         for db in resp.json().get("result", []):
             db_name = db.get("database_name", "")
-            created_by = db.get("created_by")
-            if (
-                created_by
-                and db_name.startswith("SberProcessMiningDB_spm")
-                and normalized_username in db_name
-            ):
+
+            if db_name.startswith(expected_pattern):
                 return db.get("id")
+
+        for db in resp.json().get("result", []):
+            db_name = db.get("database_name", "")
+
+            if ("SberProcessMiningDB" in db_name and
+                    normalized_username in db_name):
+                return db.get("id")
+
         return None
 
     def _create_flow(self):
@@ -445,7 +397,7 @@ class LoadFlow(SequentialTaskSet):
     def _validate_row_count(self, db_id, target_schema, flow_id):
         """Проверка количества строк с метриками"""
         try:
-            self.log(f"Start validating data for flow {flow_id}")
+            self.log(f"Start validating data for the table Tube_{flow_id}")
 
             payload = {
                 "client_id": "",
@@ -499,28 +451,56 @@ class LoadFlow(SequentialTaskSet):
             COUNT_VALIDATION_RESULT.labels(flow_id=str(flow_id)).set(0)
             return False
 
+    def _safe_stop_runner(self, message):
+        """Безопасная остановка runner с защитой от повторных срабатываний"""
+        if self.local_stop_triggered:
+            return
+
+        self.local_stop_triggered = True
+        self.log(message)
+
+        if hasattr(self, 'environment') and hasattr(self.environment, 'runner'):
+            runner = self.environment.runner
+            if not getattr(runner, 'stopped', False):
+                stop_manager.set_stop_called()
+                runner.stop()
+
     @task
     def create_and_upload_flow(self):
+        if self.local_stop_triggered or stop_manager.is_stop_called():
+            return
+
+        if stop_manager.should_stop():
+            self._safe_stop_runner("Global stop signal detected in task.")
+            return
+
         # ★★★ ЗАПОМИНАЕМ ВРЕМЯ НАЧАЛА ОБРАБОТКИ ★★★
         flow_processing_start = time.time()
 
         if not self.logged_in:
             self.establish_session()
             if not self.logged_in:
+                self.log("Failed to establish session", logging.ERROR)
                 return
 
+        self.log("Starting flow creation and upload process")
+
+        # 1. Создание flow
         flow_name, flow_id = self._create_flow()
         self.flow_id = flow_id
 
         if not flow_id:
             self.log("Failed to create flow", logging.ERROR)
             return
+        self.log(f"Flow created successfully: {flow_name} (ID: {flow_id})")
 
+        # 2. Получение параметров DAG
         target_connection, target_schema = self._get_dag_params(flow_id)
         if not target_connection or not target_schema:
             self.log("Missing DAG parameters", logging.ERROR)
             return
 
+        # 3. Обновление flow перед загрузкой
         update_resp = self._update_flow(
             flow_id,
             flow_name,
@@ -533,6 +513,7 @@ class LoadFlow(SequentialTaskSet):
             self.log("Failed to update flow before upload", logging.ERROR)
             return
 
+        # 4. Получение ID базы данных пользователя
         db_id = self._get_user_database_id()
         if not db_id:
             self.log("User database not found", logging.ERROR)
@@ -548,7 +529,7 @@ class LoadFlow(SequentialTaskSet):
             else CONFIG["upload_control"]["timeout_small"]
         )
 
-        # Start upload
+        # 5. Начало загрузки
         start_data = {
             "upload_id": f"{flow_id}_{CONFIG['block']['block_id']}",
             "database_id": str(db_id),
@@ -559,31 +540,41 @@ class LoadFlow(SequentialTaskSet):
             "total_chunks": str(self.total_chunks),
         }
 
-        self._retry_request(
+        start_resp = self._retry_request(
             self.client.post,
             url="/etl/api/v1/file/start_upload",
             name="Start file upload",
             json=start_data,
             timeout=timeout,
         )
+        if not start_resp or not start_resp.ok:
+            self.log("Failed to start file upload", logging.ERROR)
+            return
+        self.log("File upload started successfully", logging.INFO)
 
+        # 6. Загрузка чанков
         uploaded_chunks = self._upload_chunks(flow_id, db_id, target_schema)
+        self.log(f"Chunk upload completed: {uploaded_chunks}/{self.total_chunks} chunks")
 
-        # Finalize upload
+        # 7. Финализация загрузки
         finalize_data = {
             "count_chunks": uploaded_chunks,
             "upload_id": f"{flow_id}_{CONFIG['block']['block_id']}",
         }
 
-        self._retry_request(
+        finalize_resp = self._retry_request(
             self.client.post,
             url="/etl/api/v1/file/finalize",
             name="Finalize file upload",
             json=finalize_data,
             timeout=timeout,
         )
+        if not finalize_resp or not finalize_resp.ok:
+            self.log("Failed to finalize file upload", logging.ERROR)
+            return
+        self.log("File upload finalized successfully")
 
-        # Start processing
+        # 8. Начало обработки
         final_data = {
             "flow_id": int(flow_id),
             "block_id": CONFIG["block"]["block_id"],
@@ -600,7 +591,7 @@ class LoadFlow(SequentialTaskSet):
             },
         }
 
-        final = self._retry_request(
+        final_resp = self._retry_request(
             self.client.post,
             url="/etl/api/v1/file/start",
             name="Final file",
@@ -608,20 +599,16 @@ class LoadFlow(SequentialTaskSet):
             timeout=timeout,
         )
 
-        if not final or not final.ok:
+        if not final_resp or not final_resp.ok:
             self.log("Failed to start file processing", logging.ERROR)
             return
 
-        run_id = final.json().get("run_id")
+        run_id = final_resp.json().get("run_id")
         if not run_id:
             self.log("No run_id in response", logging.ERROR)
             return
 
-        self.log(
-            f"File upload process completed, {uploaded_chunks}/{self.total_chunks} chunks uploaded"
-        )
-
-        # Poll status with timeout
+        # 9. Мониторинг статуса обработки
         encoded_string = quote(str(run_id))
         status_url = f"/etl/api/v1/file/status/{encoded_string}"
         max_wait_time = timeout
@@ -629,6 +616,10 @@ class LoadFlow(SequentialTaskSet):
         poll_count = 0
 
         while time.time() - start_time < max_wait_time:
+            if stop_manager.is_stop_called():
+                self.log("Stop called during status monitoring", logging.ERROR)
+                return
+
             poll_count += 1
             status_response = self._retry_request(
                 self.client.get, url=status_url, name="Status", timeout=15
@@ -637,30 +628,53 @@ class LoadFlow(SequentialTaskSet):
             if status_response and status_response.ok:
                 status_data = status_response.json()
                 current_status = status_data.get("status")
+                error_message = status_data.get("error", "No error details")
 
                 if current_status == "success":
                     self.log("Status 'success' received! Task completed.")
+
                     # Валидация количества строк
-                    self._validate_row_count(db_id, target_schema, flow_id)
+                    validation_result = self._validate_row_count(db_id, target_schema, flow_id)
 
-                    # ★★★ ЗАПИСЫВАЕМ ОБЩЕЕ ВРЕМЯ ОБРАБОТКИ ★★★
+                    # ★★★ ДЕТАЛЬНАЯ ИНФОРМАЦИЯ О ВРЕМЕНИ ★★★
                     flow_processing_time = time.time() - flow_processing_start
-                    FLOW_PROCESSING_DURATION.labels(flow_id=str(flow_id)).observe(
-                        flow_processing_time
-                    )
+                    minutes = int(flow_processing_time // 60)
+                    seconds = flow_processing_time % 60
 
+                    FLOW_PROCESSING_DURATION.labels(flow_id=str(flow_id)).observe(flow_processing_time)
+
+                    self.log(f"Flow {flow_id} completed successfully!")
+                    self.log(f"Total processing time: {minutes}m {seconds:.1f}s ({flow_processing_time:.2f} seconds)")
+                    self.log(f"Validation: {'PASS' if validation_result else 'FAIL'}")
+                    self.log(f"Chunks: {self.total_chunks}, Rows: {self.total_lines}")
+
+                    # ★★★ РЕГИСТРИРУЕМ УСПЕШНУЮ ИТЕРАЦИЮ ★★★
+                    should_stop = stop_manager.increment_iteration()
+                    stats = stop_manager.get_stats()
+                    self.log(f"Completed iteration {stats['completed']}/{stats['max']}. Stop: {should_stop}")
+
+                    if should_stop:
+                        self._safe_stop_runner("Maximum iterations reached globally.")
                     return
 
                 elif current_status == "failed":
-                    self.log("The task ended with an error", logging.ERROR)
+                    self.log(f"The task ended with an error: {error_message}", logging.ERROR)
+                    should_stop = stop_manager.increment_iteration()
+                    if should_stop:
+                        self._safe_stop_runner("Maximum iterations reached after failure.")
                     return
 
                 else:
                     if poll_count % 5 == 0:  # Логируем каждые 5 проверок
-                        self.log(
-                            f"Current status: {current_status}. Expectation: {int(time.time() - start_time)}с"
-                        )
+                        elapsed = int(time.time() - start_time)
+                        self.log(f"Current status: {current_status}. Elapsed: {elapsed}s, Poll: {poll_count}")
+
+            else:
+                self.log(f"Status check failed (attempt {poll_count})", logging.WARNING)
 
             time.sleep(CONFIG["upload_control"]["pool_interval"])
 
-        self.log(f"Status wait timeout ({max_wait_time}с) expired", logging.ERROR)
+        self.log(f"Status wait timeout ({max_wait_time}s) expired", logging.ERROR)
+        should_stop = stop_manager.increment_iteration()
+        if should_stop:
+            self._safe_stop_runner("Maximum iterations reached after timeout.")
