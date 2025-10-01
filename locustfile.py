@@ -1,4 +1,9 @@
+import locust.runners
+locust.runners.MASTER_HEARTBEAT_TIMEOUT = 900
+locust.runners.HEARTBEAT_INTERVAL = 750
+
 from locust import HttpUser, between
+
 
 from config import CONFIG
 from scenarios.load_test import LoadFlow
