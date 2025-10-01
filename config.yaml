@@ -1,132 +1,252 @@
 api:
-  base_url: https://site.ru
-  flow_endpoint: /etl/api/v1/flow/
-block:
-  block_id: spm_file_loader_v2[0]
-  dag_id: spm_file_loader_v2
-chunk_size: 4194304
-csv_file_path: ./data/process_mining_generator/dataset/process_log_20_0GBcsv
+  base_url: FROM_ENV
+  flow_endpoint: "/etl/api/v1/flow/"
+
+upload_control:
+  timeout_small: 300  # 5 minutes
+  timeout_large: 3600  # 60 minutes
+  chunk_threshold: 200  # Chunks threshold for large files
+  pool_interval: 5  # Status check interval
+
+max_iterations: 1  # Каждый пользователь выполнит только 1 итерацию
+
+log_verbose: true
+log_debug: false
+log_level: "INFO"
+
+update_columns:
+  - column_name: "case_id"
+    column_type: "int"
+    column_use: true
+    id: 1
+  - column_name: "timestamp_start"
+    column_type: "date"
+    column_use: true
+    date_format: "yyyy-MM-dd HH:mm:ss"
+    id: 2
+  - column_name: "timestamp_end"
+    column_type: "date"
+    column_use: true
+    date_format: "yyyy-MM-dd HH:mm:ss"
+    id: 3
+  - column_name: "process"
+    column_type: "str"
+    column_use: true
+    id: 4
+  - column_name: "activity"
+    column_type: "str"
+    column_use: true
+    id: 5
+  - column_name: "duration_minutes"
+    column_type: "int"
+    column_use: true
+    id: 6
+  - column_name: "role"
+    column_type: "str"
+    column_use: true
+    id: 7
+  - column_name: "resource"
+    column_type: "str"
+    column_use: true
+    id: 8
+  - column_name: "anomaly"
+    column_type: "str"
+    column_use: true
+    id: 9
+  - column_name: "anomaly_type"
+    column_type: "str"
+    column_use: true
+    id: 10
+  - column_name: "rework"
+    column_type: "str"
+    column_use: true
+    id: 11
+  - column_name: "user_id"
+    column_type: "str"
+    column_use: true
+    id: 12
+  - column_name: "department"
+    column_type: "str"
+    column_use: true
+    id: 13
+  - column_name: "priority"
+    column_type: "str"
+    column_use: true
+    id: 14
+  - column_name: "cost"
+    column_type: "int"
+    column_use: true
+    id: 15
+  - column_name: "comment"
+    column_type: "str"
+    column_use: true
+    id: 16
+  - column_name: "resource_usage"
+    column_type: "int"
+    column_use: true
+    id: 17
+  - column_name: "processing_time"
+    column_type: "int"
+    column_use: true
+    id: 18
+  - column_name: "queue_time"
+    column_type: "int"
+    column_use: true
+    id: 19
+  - column_name: "success_rate"
+    column_type: "int"
+    column_use: true
+    id: 20
+  - column_name: "error_count"
+    column_type: "int"
+    column_use: true
+    id: 21
+  - column_name: "client_id"
+    column_type: "str"
+    column_use: true
+    id: 22
+  - column_name: "product_id"
+    column_type: "str"
+    column_use: true
+    id: 23
+  - column_name: "contract_id"
+    column_type: "str"
+    column_use: true
+    id: 24
+  - column_name: "branch_code"
+    column_type: "str"
+    column_use: true
+    id: 25
+  - column_name: "service_tier"
+    column_type: "str"
+    column_use: true
+    id: 26
+
 flow_template:
   config:
     blocks: []
+  dag: "spm_orchestrator"
+  flow_type: "spm_orchestrator"
+  retries: 1
+  schedule: "@never"
+  is_active: false
   config_inactive:
     blocks: []
     chart_height: 288
-  dag: spm_orchestrator
-  flow_type: spm_orchestrator
-  is_active: false
-  retries: 1
-  schedule: '@never'
-log_debug: false
-log_level: INFO
-log_verbose: true
+
+csv_file_path: FROM_ENV
+chunk_size: 4194304  # 4MB
 max_retries: 3
-monitoring:
-  collect_interval: 15
-  enable_metrics: true
-  metrics_port: 9090
-  metrics_prefix: superset_loadtest
-request_timeout: 30
 retry_delay: 2
-update_columns:
-- column_name: id
-  column_type: int
-  column_use: true
-  id: 1
-- column_name: process
-  column_type: str
-  column_use: true
-  id: 2
-- column_name: activity
-  column_type: str
-  column_use: true
-  id: 3
-- column_name: start
-  column_type: date
-  column_use: true
-  date_format: yyyy-MM-dd HH:mm:ss
-  id: 4
-- column_name: end
-  column_type: date
-  column_use: true
-  date_format: yyyy-MM-dd HH:mm:ss
-  id: 5
-- column_name: user_id
-  column_type: str
-  column_use: true
-  id: 6
-- column_name: department
-  column_type: str
-  column_use: true
-  id: 7
-- column_name: priority
-  column_type: str
-  column_use: true
-  id: 8
-- column_name: cost
-  column_type: int
-  column_use: true
-  id: 9
-- column_name: comment
-  column_type: str
-  column_use: true
-  id: 10
-upload_columns:
-- column_name: id
-  column_type: int
-  column_use: true
-  id: 1
-- column_name: process
-  column_type: str
-  column_use: true
-  id: 2
-- column_name: activity
-  column_type: str
-  column_use: true
-  id: 3
-- column_name: start
-  column_type: date
-  column_use: true
-  date_format: yyyy-MM-dd HH:mm:ss
-  id: 4
-- column_name: end
-  column_type: date
-  column_use: true
-  date_format: yyyy-MM-dd HH:mm:ss
-  id: 5
-- column_name: user_id
-  column_type: str
-  column_use: true
-  id: 6
-- column_name: department
-  column_type: str
-  column_use: true
-  id: 7
-- column_name: priority
-  column_type: str
-  column_use: true
-  id: 8
-- column_name: cost
-  column_type: int
-  column_use: true
-  id: 9
-- column_name: comment
-  column_type: str
-  column_use: true
-  id: 10
-upload_control:
-  chunk_threshold: 200
-  pool_interval: 5
-  timeout_large: 1800
-  timeout_small: 300
+request_timeout: 30
+
 upload_settings:
   date_convert: true
-  default_timezone: Europe/Moscow
-  delimiter: ','
-  encoding: UTF-8
-  file_type: CSV
-  if_exists: replace
+  default_timezone: "Europe/Moscow"
+  delimiter: ","
+  encoding: "UTF-8"
+  file_type: "CSV"
+  if_exists: "replace"
   skip_rows: 0
+
+upload_columns:
+  - column_name: "case_id"
+    column_type: "int"
+    column_use: true
+    id: 1
+  - column_name: "timestamp_start"
+    column_type: "date"
+    column_use: true
+    date_format: "yyyy-MM-dd HH:mm:ss"
+    id: 2
+  - column_name: "timestamp_end"
+    column_type: "date"
+    column_use: true
+    date_format: "yyyy-MM-dd HH:mm:ss"
+    id: 3
+  - column_name: "process"
+    column_type: "str"
+    column_use: true
+    id: 4
+  - column_name: "activity"
+    column_type: "str"
+    column_use: true
+    id: 5
+  - column_name: "duration_minutes"
+    column_type: "int"
+    column_use: true
+    id: 6
+  - column_name: "role"
+    column_type: "str"
+    column_use: true
+    id: 7
+  - column_name: "resource"
+    column_type: "str"
+    column_use: true
+    id: 8
+  - column_name: "anomaly"
+    column_type: "str"
+    column_use: true
+    id: 9
+  - column_name: "anomaly_type"
+    column_type: "str"
+    column_use: true
+    id: 10
+  - column_name: "rework"
+    column_type: "str"
+    column_use: true
+    id: 11
+  - column_name: "user_id"
+    column_type: "str"
+    column_use: true
+    id: 12
+  - column_name: "department"
+    column_type: "str"
+    column_use: true
+    id: 13
+  - column_name: "priority"
+    column_type: "str"
+    column_use: true
+    id: 14
+  - column_name: "cost"
+    column_type: "int"
+    column_use: true
+    id: 15
+  - column_name: "comment"
+    column_type: "str"
+    column_use: true
+    id: 16
+  - column_name: "resource_usage"
+    column_type: "int"
+    column_use: true
+    id: 17
+  - column_name: "processing_time"
+    column_type: "int"
+    column_use: true
+    id: 18
+  - column_name: "queue_time"
+    column_type: "int"
+    column_use: true
+    id: 19
+  - column_name: "success_rate"
+    column_type: "int"
+    column_use: true
+    id: 20
+  - column_name: "error_count"
+    column_type: "int"
+    column_use: true
+    id: 21
+
+block:
+  block_id: "spm_file_loader_v2[0]"
+  dag_id: "spm_file_loader_v2"
+
+monitoring:
+  enable_metrics: true
+  metrics_port: 9090
+  metrics_prefix: "superset_loadtest"
+  collect_interval: 15  # seconds
+
 users:
 - password: FROM_ENV
   username: admin
