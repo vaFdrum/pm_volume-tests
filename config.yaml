@@ -1,4 +1,3 @@
-
 api:
   base_url: FROM_ENV
   flow_endpoint: "/etl/api/v1/flow/"
@@ -8,6 +7,7 @@ upload_control:
   timeout_large: 3600  # 60 minutes
   chunk_threshold: 200  # Chunks threshold for large files
   pool_interval: 5  # Status check interval
+  pm_timeout: 3600  # 1 hour for Process Mining
 
 max_iterations: FROM_ENV  # По-умолчанию пользователь выполнит только 1 итерацию
 
@@ -239,84 +239,84 @@ upload_columns:
     id: 21
 
 marking_config:
-    - key: "ID"
-      name: "case_id"
-      objectName: null
-    - key: "DATE"
-      name: "timestamp_start"
-      objectName: null
-    - key: "DATE_END"
-      name: "timestamp_end"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "process"
-      objectName: null
-    - key: "STATUS_NAME"
-      name: "activity"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "duration_minutes"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "role"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "resource"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "anomaly"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "anomaly_type"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "rework"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "user_id"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "department"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "priority"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "cost"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "comment"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "resource_usage"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "processing_time"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "queue_time"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "success_rate"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "error_count"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "client_id"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "product_id"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "contract_id"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "branch_code"
-      objectName: null
-    - key: "WITHOUT_KEY"
-      name: "service_tier"
-      objectName: null
+  - key: "ID"
+    name: "case_id"
+    objectName: null
+  - key: "DATE"
+    name: "timestamp_start"
+    objectName: null
+  - key: "DATE_END"
+    name: "timestamp_end"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "process"
+    objectName: null
+  - key: "STATUS_NAME"
+    name: "activity"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "duration_minutes"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "role"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "resource"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "anomaly"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "anomaly_type"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "rework"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "user_id"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "department"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "priority"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "cost"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "comment"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "resource_usage"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "processing_time"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "queue_time"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "success_rate"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "error_count"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "client_id"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "product_id"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "contract_id"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "branch_code"
+    objectName: null
+  - key: "WITHOUT_KEY"
+    name: "service_tier"
+    objectName: null
 
 block:
   block_id: "spm_file_loader_v2[0]"
@@ -330,12 +330,4 @@ monitoring:
 
 users:
 - password: FROM_ENV
-  username: admin
-- password: FROM_ENV
-  username: autoanalyst
-- password: FROM_ENV
-  username: autoanalystexpert
-- password: FROM_ENV
-  username: uservt_1
-- password: FROM_ENV
-  username: uservt_2
+  username: user
