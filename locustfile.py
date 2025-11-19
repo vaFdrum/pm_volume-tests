@@ -7,9 +7,10 @@ from locust import HttpUser, between
 
 from config import CONFIG
 from scenarios.load_test import LoadFlow
+from scenarios.process_metrics import ProcessMetricsCalculator
 
 
 class SupersetUser(HttpUser):
     host = CONFIG["api"]["base_url"]
-    tasks = [LoadFlow]
+    tasks = [ProcessMetricsCalculator]
     wait_time = between(min_wait=1, max_wait=5)
