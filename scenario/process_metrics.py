@@ -72,7 +72,7 @@ class ProcessMetricsCalculator(Api):
         self.log("User stopping")
 
     @task
-    def create_and_upload_flow(self):
+    def create_and_upload_pm(self):
         """Основная задача: создание flow с загрузкой файла и отдельного PM flow"""
 
         if not self.logged_in:
@@ -142,15 +142,15 @@ class ProcessMetricsCalculator(Api):
                 return
 
             # 8. Начало обработки
-            run_id = self._start_file_processing(flow_id, target_connection, target_schema,
+            file_run_id = self._start_file_processing(flow_id, target_connection, target_schema,
                                                  self.total_chunks, timeout)
-            if not run_id:
+            if not file_run_id:
                 return
 
             # 9. Мониторинг статуса обработки файла
             file_processing_start = time.time()
             success = self._monitor_processing_status(
-                run_id, timeout, flow_id, db_id, target_schema,
+                file_run_id, timeout, flow_id, db_id, target_schema,
                 self.total_lines, file_processing_start, is_pm_flow=False
             )
 
@@ -161,8 +161,8 @@ class ProcessMetricsCalculator(Api):
             self.log(f"File processing completed successfully for flow {flow_id}")
 
             # 10. Получаем параметры для PM блока
-            source_connection, source_schema = self._get_dag_pm_params(flow_id)
-            if not source_connection or not source_schema:
+            source_connection, source_schema, storage_connection, compute_connection = self._get_dag_pm_params(flow_id)
+            if not all([source_connection, source_schema, storage_connection, compute_connection]):
                 self.log("Missing PM DAG parameters", logging.ERROR)
                 return
 
@@ -174,6 +174,8 @@ class ProcessMetricsCalculator(Api):
                 worker_id=self.worker_id,
                 source_connection=source_connection,
                 source_schema=source_schema,
+                storage_connection=storage_connection,
+                compute_connection=compute_connection,
                 table_name=table_name,
                 base_flow_name=flow_name
             )
@@ -187,7 +189,7 @@ class ProcessMetricsCalculator(Api):
 
             # 12. Запускаем Process Mining flow
             self.log(f"Starting Process Mining flow {pm_flow_id}...")
-            pm_run_id = self._start_pm_processing(pm_flow_id, source_connection, source_schema, table_name)
+            pm_run_id = self._start_pm_flow(pm_flow_id, source_connection, source_schema, storage_connection, compute_connection, table_name)
 
             if not pm_run_id:
                 self.log("Failed to start Process Mining flow", logging.ERROR)
@@ -195,12 +197,48 @@ class ProcessMetricsCalculator(Api):
 
             # 13. Мониторинг статуса Process Mining
             pm_timeout = CONFIG["upload_control"]["pm_timeout"]
-            pm_success = self._monitor_processing_status(
+            pm_result = self._monitor_processing_status(
                 pm_run_id, pm_timeout, pm_flow_id, is_pm_flow=True
             )
 
-            if pm_success:
+            # 14. Обработка результата PM flow и открытие дашборда
+            if isinstance(pm_result, dict) and pm_result.get("success"):
                 self.log(f"Process Mining completed successfully for flow {pm_flow_id}!")
+
+                # Получаем block_run_ids из результата мониторинга
+                block_run_ids = pm_result.get("block_run_ids", {})
+
+                # Определяем целевой блок
+                target_block_id = "spm_dashboard_creation_v_0_2[0]"
+                block_run_id = block_run_ids.get(target_block_id)
+
+                if block_run_id:
+                    # Получаем URL дашборда из артефактов
+                    self.log(f"Fetching dashboard URL for block {target_block_id}...")
+                    dashboard_url = self._get_dashboard_url_from_artefacts(
+                        pm_flow_id=pm_flow_id,
+                        block_id=target_block_id,
+                        block_run_id=block_run_id,
+                        run_id=pm_run_id
+                    )
+
+                    if dashboard_url:
+                        # Открываем дашборд
+                        self.log(f"Opening dashboard: {dashboard_url}")
+                        dashboard_loaded = self._open_dashboard(dashboard_url)
+
+                        if dashboard_loaded:
+                            self.log(f"Dashboard successfully loaded: {dashboard_url}")
+                        else:
+                            self.log(f"Failed to load dashboard: {dashboard_url}", logging.WARNING)
+                    else:
+                        self.log("Could not retrieve dashboard URL from artefacts", logging.WARNING)
+                else:
+                    self.log(f"block_run_id not found for block {target_block_id}", logging.WARNING)
+
+            elif pm_result is True:
+                # Старый формат ответа (без block_run_ids)
+                self.log(f"Process Mining completed but no block_run_ids available", logging.WARNING)
             else:
                 self.log(f"Process Mining failed for flow {pm_flow_id}", logging.ERROR)
 
