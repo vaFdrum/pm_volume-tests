@@ -185,13 +185,13 @@ class Api(SequentialTaskSet):
         return flow_name, new_flow_id
 
     def _get_dag_import_params(self, flow_id):
-        """Get DAG parameters for flow"""
+        """Get DAG file import parameters for a flow"""
         url = (
             f"/etl/api/v1/flow/dag_params/v2/spm_file_loader_v2?"
             f"q=(active:!f,block_id:0,enum_limit:20,flow_id:{flow_id})"
         )
         resp = self._retry_request(
-            self.client.get, url, name="Get DAG parameters", timeout=15
+            self.client.get, url, name="Get DAG file import parameters", timeout=15
         )
         if not resp or not resp.ok:
             return None, None
@@ -460,6 +460,9 @@ class Api(SequentialTaskSet):
         poll_count = 0
         monitoring_start = time.time()
 
+        # Словарь для хранения block_run_id по block_id
+        block_run_ids = {}
+
         while time.time() - start_time < max_wait_time:
             if stop_manager.is_stop_called():
                 self.log("Stop called during status monitoring", logging.ERROR)
@@ -480,10 +483,22 @@ class Api(SequentialTaskSet):
                     current_status = result_data.get("status")
                     flow_id_from_response = result_data.get("flow_id")
 
-                    # Дополнительная информация для отладки
+                    # Извлекаем информацию о блоках включая block_run_id
                     blocks_status = []
                     for block in result_data.get("blocks", []):
-                        blocks_status.append(f"{block.get('block_id')}: {block.get('status')}")
+                        block_id = block.get("block_id")
+                        block_status = block.get("status")
+                        block_run_id = block.get("block_run_id")
+
+                        blocks_status.append(f"{block_id}: {block_status}")
+
+                        # Сохраняем block_run_id
+                        if block_id and block_run_id:
+                            block_run_ids[block_id] = block_run_id
+
+                            # Логируем block_run_id при первом обнаружении или изменении статуса
+                            if poll_count == 1:
+                                self.log(f"Block '{block_id}' run_id: {block_run_id}")
 
                     # Логируем информацию о блоках каждые 10 опросов
                     if blocks_status and poll_count % 10 == 1:
@@ -504,7 +519,10 @@ class Api(SequentialTaskSet):
                     self.log(f"Status 'success' received! {'PM' if is_pm_flow else 'File'} processing completed.")
                     self.log(f"{'PM' if is_pm_flow else 'File'} processing time: {minutes}m {seconds:.1f}s")
 
-                    # Для файловых потоков выполняем валидацию количества строк
+                    # Логируем все собранные block_run_id при успешном завершении
+                    if is_pm_flow and block_run_ids:
+                        self.log(f"Completed block_run_ids: {block_run_ids}")
+
                     if not is_pm_flow and db_id and target_schema and total_lines is not None:
                         validation_result = self._validate_row_count(
                             db_id, target_schema, flow_id, total_lines
@@ -515,6 +533,9 @@ class Api(SequentialTaskSet):
                             FLOW_PROCESSING_DURATION.labels(flow_id=str(flow_id)).observe(total_processing_time)
                             self.log(f"Validation: {'PASS' if validation_result else 'FAIL'}")
 
+                    # Возвращаем block_run_ids для PM потоков
+                    if is_pm_flow:
+                        return {"success": True, "block_run_ids": block_run_ids}
                     return True
 
                 elif current_status == "failed":
@@ -525,11 +546,14 @@ class Api(SequentialTaskSet):
                     # Для PM потоков логируем детали блоков при ошибке
                     if is_pm_flow and blocks_status:
                         self.log(f"PM blocks status at failure: {' | '.join(blocks_status)}")
+                        # Логируем block_run_id для неуспешных блоков
+                        for block in result_data.get("blocks", []):
+                            if block.get("status") == "failed":
+                                self.log(f"Failed block_run_id: {block.get('block_run_id')}")
 
                     return False
 
                 elif current_status in ["running", "pending", "scheduled"]:
-                    # Нормальные статусы выполнения - логируем периодически
                     if poll_count % 5 == 0:
                         elapsed = int(time.time() - monitoring_start)
                         status_info = f"{'PM' if is_pm_flow else 'File'} status: {current_status}"
@@ -626,9 +650,9 @@ class Api(SequentialTaskSet):
         )
         if not resp or not resp.ok:
             self.log(f"Failed to get PM DAG params. Status: {resp.status_code if resp else 'No response'}")
-            return None, None
+            return None, None, None, None
 
-        source_connection = source_schema = None
+        source_connection = source_schema = storage_connection = compute_connection = None
         result_data = resp.json().get("result", [])
 
         for item in result_data:
@@ -636,15 +660,18 @@ class Api(SequentialTaskSet):
                 source_connection = item[1]["value"]
             elif item[0] == "source_schema":
                 source_schema = item[1]["value"]
+            elif item[0] == "storage_connection":
+                storage_connection = item[1]["value"]
+            elif item[0] == "compute_connection":
+                compute_connection =item[1]["value"]
 
-        return source_connection, source_schema
+        return source_connection, source_schema, storage_connection, compute_connection
 
-    def _create_pm_flow(self, worker_id=0, source_connection=None, source_schema=None, table_name=None,
+    def _create_pm_flow(self, worker_id=0, source_connection=None, source_schema=None, storage_connection=None, compute_connection=None, table_name=None,
                              base_flow_name=None):
         """Create a new flow with only Process Mining block"""
         try:
-            # Используем имя основного flow для создания PM имени
-            flow_name = f"{base_flow_name}_PM"  # Tube_100 -> Tube_100_PM
+            flow_name = f"{base_flow_name}_PM"
 
             flow_data = copy.deepcopy(CONFIG["flow_template"])
             flow_data["label"] = flow_name
@@ -661,18 +688,14 @@ class Api(SequentialTaskSet):
                     "source_table": table_name,
                     "dashboard_title": table_name,
                     "threshold": 30,
-                    "validation_types": [
-                        "DUPLICATES",
-                        "START_END_DATE",
-                        "UNRECOGNIZED_VALUES_IN_KEY_FIELDS"
-                    ],
+                    "validation_types": CONFIG["validation_types"],
                     "duplicate_reaction": "DROP_BY_KEY",
                     "marking": CONFIG["marking_config"],
                     "packet_size": 0,
                     "run_auto_insights": False,
                     "autoinsights_timeout_sec": 36000,
-                    "compute_connection": "_internal_ch_admin",
-                    "storage_connection": "SberProcessMiningDB_spm45",
+                    "compute_connection": compute_connection,
+                    "storage_connection": storage_connection,
                     "is_config_valid": True
                 },
                 "number": 1,
@@ -707,7 +730,7 @@ class Api(SequentialTaskSet):
             self.log(f"Error creating PM-only flow: {str(e)}", logging.ERROR)
             return None, None
 
-    def _start_pm_processing(self, pm_flow_id, source_connection, source_schema, table_name):
+    def _start_pm_flow(self, pm_flow_id, source_connection, source_schema, storage_connection, compute_connection, table_name):
         """Start Process Mining flow processing with configuration body"""
         try:
             self.log(f"Starting Process Mining flow {pm_flow_id}")
@@ -724,23 +747,19 @@ class Api(SequentialTaskSet):
                                 "activity_start_col": "timestamp_start",
                                 "autoinsights_timeout_sec": 36000,
                                 "case_col_name": "case_id",
-                                "compute_connection": "_internal_ch_admin",
-                                "dashboard_title": table_name,  # Используем имя таблицы
+                                "compute_connection": compute_connection,
+                                "dashboard_title": table_name,
                                 "duplicate_reaction": "DROP_BY_KEY",
                                 "is_config_valid": True,
-                                "marking": CONFIG["marking_config"],  # Используем конфиг из настроек
+                                "marking": CONFIG["marking_config"],
                                 "packet_size": 0,
                                 "run_auto_insights": False,
                                 "source_connection": source_connection,
                                 "source_schema": source_schema,
                                 "source_table": table_name,
-                                "storage_connection": "SberProcessMiningDB_spm45",
+                                "storage_connection": storage_connection,
                                 "threshold": 30,
-                                "validation_types": [
-                                    "DUPLICATES",
-                                    "START_END_DATE",
-                                    "UNRECOGNIZED_VALUES_IN_KEY_FIELDS"
-                                ]
+                                "validation_types": CONFIG["validation_types"]
                             },
                             "dag_id": "spm_dashboard_creation_v_0_2",
                             "id": "spm_dashboard_creation_v_0_2[0]",
@@ -761,7 +780,7 @@ class Api(SequentialTaskSet):
                 self.client.post,
                 url=f"/etl/api/v1/flow/{pm_flow_id}/trigger",
                 name="Start PM flow",
-                json=request_body,  # Отправляем конфигурацию в теле
+                json=request_body,
                 timeout=30,
             )
 
@@ -792,3 +811,89 @@ class Api(SequentialTaskSet):
         except Exception as e:
             self.log(f"Error starting PM flow: {str(e)}", logging.ERROR)
             return None
+
+    def _get_dashboard_url_from_artefacts(self, pm_flow_id, block_id, block_run_id, run_id):
+        """Extracting the dashboard URL from PM flow artifacts."""
+
+        # Формируем параметры фильтра
+        filter_params = (
+            f"(filters:!("
+            f"(col:flow_id,opr:eq,value:'{pm_flow_id}'),"
+            f"(col:block_id,opr:eq,value:'{block_id}'),"
+            f"(col:block_dag_run_id,opr:eq,value:'{block_run_id}'),"
+            f"(col:flow_dag_run_id,opr:eq,value:'{run_id}')"
+            f"),order_column:timestamp,order_direction:desc,page:0,page_size:12)"
+        )
+
+        # URL-кодируем параметры
+        encoded_params = quote(filter_params, safe='')
+        artefact_url = f"/etl/api/v1/flowartefact/?q={encoded_params}"
+
+        self.log(f"Fetching artefacts for flow_id={pm_flow_id}, block_id={block_id}")
+
+        response = self._retry_request(
+            self.client.get,
+            url=artefact_url,
+            name="Flow Artefacts",
+            timeout=30
+        )
+
+        if not response or not response.ok:
+            self.log(f"Failed to fetch flow artefacts: {response.status_code if response else 'No response'}",
+                     logging.ERROR)
+            return None
+
+        try:
+            data = response.json()
+            artefacts = data.get("result", [])
+
+            if not artefacts:
+                self.log("No artefacts found in response", logging.WARNING)
+                return None
+
+            # Ищем артефакт с event_type = "DASHBOARD_CREATED"
+            for artefact in artefacts:
+                event_type = artefact.get("event_type")
+
+                if event_type == "DASHBOARD_CREATED":
+                    dashboard_url = artefact.get("object_url")
+                    object_id = artefact.get("object_id")
+
+                    if dashboard_url:
+                        self.log(f"Found dashboard URL: {dashboard_url} (object_id: {object_id})")
+                        return dashboard_url
+                    else:
+                        self.log("DASHBOARD_CREATED found but object_url is missing", logging.WARNING)
+
+            # Если не нашли нужный event_type, логируем доступные
+            available_events = [a.get("event_type") for a in artefacts]
+            self.log(f"DASHBOARD_CREATED not found. Available event_types: {available_events}", logging.WARNING)
+            return None
+
+        except Exception as e:
+            self.log(f"Error parsing artefacts response: {e}", logging.ERROR)
+            return None
+
+    def _open_dashboard(self, dashboard_url):
+        """Открывает дашборд по URL и проверяет успешность загрузки."""
+
+        if not dashboard_url:
+            self.log("Dashboard URL is empty", logging.ERROR)
+            return False
+
+        self.log(f"Opening dashboard: {dashboard_url}")
+
+        response = self._retry_request(
+            self.client.get,
+            url=dashboard_url,
+            name="Dashboard Load",
+            timeout=60
+        )
+
+        if response and response.ok:
+            self.log(f"Dashboard loaded successfully: {dashboard_url}")
+            return True
+        else:
+            status = response.status_code if response else 'No response'
+            self.log(f"Failed to load dashboard: {status}", logging.ERROR)
+            return False
